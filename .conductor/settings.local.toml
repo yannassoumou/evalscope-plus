@@ -1,0 +1,17 @@
+"$schema" = "https://conductor.build/schemas/settings.repo.schema.json"
+
+[scripts]
+setup = "pip install -e '.[dev,perf,docs]'"
+run_mode = "concurrent"
+archive = "rm -rf outputs"
+
+[scripts.run.service]
+available_in = [ "local" ]
+command = "evalscope service --host 127.0.0.1 --port $CONDUCTOR_PORT"
+default = true
+icon = "globe"
+
+[scripts.run.web]
+available_in = [ "local" ]
+command = "cd evalscope/web && npm install && npm run dev -- --port $((CONDUCTOR_PORT + 1))"
+icon = "monitor"
