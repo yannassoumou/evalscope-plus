@@ -1,7 +1,8 @@
 # flake8: noqa: E501
 from copy import deepcopy
-from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Any, Dict, List, Literal, Optional
+
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from evalscope.utils.argument_utils import secretize_auth_headers
 from evalscope.utils.json_schema import JSONSchema
@@ -38,6 +39,7 @@ class AnthropicCacheControl(BaseModel):
 
 class GenerateConfig(BaseModel):
     """Model generation options."""
+
     model_config = {'extra': 'allow'}
 
     timeout: Optional[float] = Field(default=None)
@@ -205,4 +207,6 @@ class GenerateConfig(BaseModel):
             value = getattr(other, key, None)
             if value is not None:
                 setattr(config, key, value)
+        if other.model_extra:
+            config.model_extra.update(other.model_extra)
         return config

@@ -8,12 +8,14 @@ import from ``evalscope.api.agent`` to participate.
 
 from dataclasses import dataclass, field
 from enum import Enum
-from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from evalscope.api.messages import ChatMessage, Content
 from evalscope.api.model import ModelOutput
 from evalscope.api.tool import ToolCall, ToolInfo
+
 from .mcp.types import MCPServerConfig
 
 if TYPE_CHECKING:
@@ -78,6 +80,17 @@ class NativeAgentConfig(BaseAgentConfig):
 
     Tool calls that explicitly pass a timeout keep their own value. ``None``
     means use each tool's built-in default.
+    """
+
+    validate_tool_arguments: bool = Field(default=False)
+    """Reject tool calls whose arguments violate the tool's advertised JSON schema.
+
+    When enabled, :class:`ToolExecutor` checks every call against the
+    ``ToolInfo.parameters`` shown to the model before dispatching it. A
+    violating call is not executed: the model receives the violation as a
+    ``parsing`` tool error observation and can correct itself on the next
+    turn, and the ``TOOL_RESULT`` trace event carries ``error='parsing'``.
+    Off by default so existing benchmark scores are unaffected.
     """
 
     mcp_servers: List[MCPServerConfig] = Field(default_factory=list)
@@ -198,6 +211,9 @@ class AgentContext:
     tools: List[ToolInfo] = field(default_factory=list)
     step: int = 0
     max_steps: int = 10
+    validate_tool_arguments: bool = False
+    """Whether tool calls must satisfy their advertised JSON schemas."""
+
     last_output: Optional[ModelOutput] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
     nudge_count: int = 0

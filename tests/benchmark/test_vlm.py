@@ -30,8 +30,9 @@ class TestVLMBenchmark(TestBenchmark):
                 'parallel_tool_calls': True,
                 'retries': 1
             },
-            'judge_strategy': JudgeStrategy.AUTO,
-            'judge_model_args': {
+            'judge': {
+                'strategy': JudgeStrategy.AUTO,
+                'models': {
                 'model_id': 'qwen-plus',
                 'api_url': 'https://dashscope.aliyuncs.com/compatible-mode/v1',
                 'api_key': env.get('DASHSCOPE_API_KEY'),
@@ -39,6 +40,7 @@ class TestVLMBenchmark(TestBenchmark):
                     'temperature': 0.0,
                     'max_tokens': 4096,
                 }
+                },
             },
             'debug': True,
         }
@@ -514,6 +516,14 @@ class TestVLMBenchmark(TestBenchmark):
         dataset_args = {'subset_list': ['CAD']}
         self._run_dataset_test('screenspot_pro', dataset_args=dataset_args, limit=5, use_mock=True)
 
+    def test_ref_adv_s(self):
+        """Test Ref-Adv-s adversarial referring expression benchmark."""
+        self._run_dataset_test('ref_adv_s', limit=5)
+
+    def test_ref_adv_s_mock(self):
+        """Test Ref-Adv-s with mock LLM."""
+        self._run_dataset_test('ref_adv_s', limit=5, use_mock=True)
+
     def test_cc_ocr_v2(self):
         """Test CC-OCR-V2 real-world document OCR benchmark."""
         dataset_args = {'subset_list': ['info_board_parsing', 'text_grounding', 'blueprint_qa']}
@@ -547,7 +557,7 @@ class TestVLMBenchmark(TestBenchmark):
             dataset_args=dataset_args,
             limit=3,
             use_mock=True,
-            judge_model_args={'model_id': 'mock-judge', 'eval_type': EvalType.MOCK_LLM},
+            judge={'models': {'model_id': 'mock-judge', 'eval_type': EvalType.MOCK_LLM}},
         )
 
     def test_logic_vista(self):
@@ -566,6 +576,14 @@ class TestVLMBenchmark(TestBenchmark):
         """Test PMC-VQA with mock LLM."""
         self._run_dataset_test('pmc_vqa', limit=5, use_mock=True)
 
+    def test_medxpertqa(self):
+        """Test MedXpertQA expert-level medical reasoning benchmark."""
+        self._run_dataset_test('medxpertqa', limit=5)
+
+    def test_medxpertqa_mock(self):
+        """Test the Text and MM subsets of MedXpertQA with mock LLM."""
+        self._run_dataset_test('medxpertqa', limit=5, use_mock=True)
+
     def test_count_qa(self):
         """Test CountQA object counting benchmark."""
         self._run_dataset_test('count_qa', limit=5)
@@ -573,6 +591,24 @@ class TestVLMBenchmark(TestBenchmark):
     def test_count_qa_mock(self):
         """Test CountQA with mock LLM."""
         self._run_dataset_test('count_qa', limit=5, use_mock=True)
+
+    def test_vlms_are_biased(self):
+        """Test VLMs Are Biased counterfactual visual reasoning benchmark."""
+        dataset_args = {'subset_list': ['main']}
+        self._run_dataset_test('vlms_are_biased', dataset_args=dataset_args, limit=5)
+
+    def test_vlms_are_biased_mock(self):
+        """Test VLMs Are Biased with mock LLM."""
+        dataset_args = {'subset_list': ['main']}
+        self._run_dataset_test('vlms_are_biased', dataset_args=dataset_args, limit=5, use_mock=True)
+
+    def test_surds(self):
+        """Test SURDS driving-scene spatial reasoning benchmark."""
+        self._run_dataset_test('surds', limit=5)
+
+    def test_surds_mock(self):
+        """Test SURDS with mock LLM."""
+        self._run_dataset_test('surds', limit=5, use_mock=True)
 
     def test_phyx_mc(self):
         """Test PhyX multiple-choice physical reasoning benchmark."""
@@ -597,7 +633,7 @@ class TestVLMBenchmark(TestBenchmark):
             dataset_args=dataset_args,
             limit=5,
             use_mock=True,
-            judge_model_args={'model_id': 'mock-judge', 'eval_type': EvalType.MOCK_LLM},
+            judge={'models': {'model_id': 'mock-judge', 'eval_type': EvalType.MOCK_LLM}},
         )
 
     def test_phyx_oe_testmini(self):
@@ -612,3 +648,32 @@ class TestVLMBenchmark(TestBenchmark):
     def test_slake_mock(self):
         """Test SLAKE with mock LLM."""
         self._run_dataset_test('slake', limit=5, use_mock=True)
+
+    def test_olmocr_bench(self):
+        """Test olmOCR-Bench PDF page transcription benchmark."""
+        self._run_dataset_test('olmocr_bench', limit=5)
+
+    def test_olmocr_bench_mock(self):
+        """Test olmOCR-Bench with mock LLM."""
+        self._run_dataset_test('olmocr_bench', limit=5, use_mock=True)
+
+    def test_visfactor(self):
+        """Test VisFactor visual cognition benchmark."""
+        self._run_dataset_test('visfactor', limit=5)
+
+    def test_visfactor_mock(self):
+        """Test VisFactor with mock LLM."""
+        self._run_dataset_test('visfactor', limit=5, use_mock=True)
+
+    def test_vtcbench(self):
+        """Test VTCBench long context vision-text compression benchmark."""
+        self._run_dataset_test('vtcbench', limit=1)
+
+    def test_vtcbench_mock(self):
+        """Test VTCBench with mock LLM."""
+        self._run_dataset_test('vtcbench', limit=1, use_mock=True)
+
+    def test_vtcbench_text_mock(self):
+        """Test the VTCBench pure-text baseline with mock LLM."""
+        dataset_args = {'extra_params': {'eval_mode': 'text'}}
+        self._run_dataset_test('vtcbench', dataset_args=dataset_args, limit=1, use_mock=True)

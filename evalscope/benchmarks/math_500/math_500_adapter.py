@@ -13,6 +13,7 @@ logger = get_logger()
 
 @register_benchmark(
     BenchmarkMeta(
+        evaluation_version='v1.1',
         name='math_500',
         pretty_name='MATH-500',
         tags=[Tags.MATH, Tags.REASONING],
@@ -46,11 +47,7 @@ MATH-500 is a curated subset of 500 problems from the MATH benchmark, designed t
 """,
         dataset_id='AI-ModelScope/MATH-500',
         subset_list=['Level 1', 'Level 2', 'Level 3', 'Level 4', 'Level 5'],
-        metric_list=[{
-            'acc': {
-                'numeric': True
-            }
-        }],
+        metric_list=[{'acc': {'numeric': True}}],
         few_shot_num=0,
         train_split=None,
         eval_split='test',
@@ -58,7 +55,6 @@ MATH-500 is a curated subset of 500 problems from the MATH benchmark, designed t
     )
 )
 class Math500Adapter(DefaultDataAdapter):
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -68,7 +64,7 @@ class Math500Adapter(DefaultDataAdapter):
         return Sample(
             input=record['problem'],
             target=record['answer'],
-            subset_key=f"Level {record['level']}",
+            subset_key=f'Level {record["level"]}',
             metadata={
                 'question_id': record['unique_id'],
                 'solution': record['solution'],

@@ -1,12 +1,13 @@
 import copy
 from collections import OrderedDict
 from dataclasses import asdict, dataclass, field
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Type, Union
+
 from pydantic import BaseModel
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type, Union
 
 from evalscope.api.metric.semantics import MetricSelector
 from evalscope.constants import OutputType
-from evalscope.metrics.semantics.identity import migrate_legacy_identity
+from evalscope.metrics.semantics.legacy_identity import canonical_metric_list_name, migrate_legacy_identity
 from evalscope.utils import get_logger
 
 logger = get_logger()
@@ -40,6 +41,12 @@ class BenchmarkMeta:
 
     few_shot_num: int = 0
     """ Number of few-shot examples to use."""
+
+    few_shot_mode: Literal['auto', 'disabled', 'fixed'] = 'auto'
+    """Supported few-shot strategy for this benchmark."""
+
+    allowed_few_shot_nums: Optional[Tuple[int, ...]] = None
+    """Allowed few-shot counts, or ``None`` when every non-negative count is valid."""
 
     few_shot_random: bool = False
     """ Whether to use random few-shot examples."""
@@ -127,7 +134,7 @@ class BenchmarkMeta:
     """
 
     sandbox_config: Optional[Dict[str, Any]] = field(default_factory=dict)
-    """Configuration for sandboxed code execution environments. """
+    """Configuration for sandboxed code execution environments."""
 
     max_image_bytes: Optional[Union[int, str]] = None
     """Maximum image size for vision-language benchmarks.
@@ -137,36 +144,61 @@ class BenchmarkMeta:
     ``'1.5gb'`` (parsed by ``parse_size``).
     Useful for avoiding 413 errors when sending multi-image payloads to APIs."""
 
+    evaluation_version: str = 'v1.0'
+    """Published evaluation semantics version used for cache compatibility."""
+
+    dataset_revision: Optional[str] = None
+    """Optional immutable revision of the remote dataset source."""
+
     def __post_init__(self):
         """Validate fields after initialization."""
-        if self.few_shot_num < 0:
-            raise ValueError('few_shot_num must be >= 0')
+        from evalscope.evaluation_versioning import validate_evaluation_version
+
+        validate_evaluation_version(self.evaluation_version)
+        self._validate_few_shot_metadata()
         self._normalize_metric_list()
         self._normalize_primary_metric()
         self._validate_primary_metric()
 
+    def _validate_few_shot_metadata(self) -> None:
+        """Validate benchmark-declared few-shot capabilities."""
+        if self.few_shot_num < 0:
+            raise ValueError('few_shot_num must be >= 0')
+        if self.few_shot_mode not in {'auto', 'disabled', 'fixed'}:
+            raise ValueError(f'Unsupported few_shot_mode: {self.few_shot_mode}')
+        if self.few_shot_mode == 'disabled':
+            if self.allowed_few_shot_nums is not None:
+                raise ValueError('allowed_few_shot_nums requires few_shot_mode to be auto or fixed')
+            return
+        if self.few_shot_mode == 'fixed' and not self.allowed_few_shot_nums:
+            raise ValueError('fixed few_shot_mode requires allowed_few_shot_nums')
+        if self.allowed_few_shot_nums is not None:
+            if not self.allowed_few_shot_nums:
+                raise ValueError('allowed_few_shot_nums must not be empty')
+            if any(
+                not isinstance(count, int) or isinstance(count, bool) or count < 0
+                for count in self.allowed_few_shot_nums
+            ):
+                raise ValueError('allowed_few_shot_nums must contain non-negative integers')
+            if 0 not in self.allowed_few_shot_nums:
+                raise ValueError('allowed_few_shot_nums must include 0')
+
     def _normalize_metric_list(self) -> None:
         """Normalize unambiguous legacy scorer aliases at the adapter boundary.
 
-        Only pure re-spellings are listed. An entry here must keep ``get_metric()`` working, since
-        a declared name is looked up in the metric registry: ``acc`` and ``exact_match`` are both
-        registered, and the rest name no scorer at all because their adapter computes its own
-        metrics. A name whose canonical form is *not* registered while the alias is would break
-        that lookup, so it must not be added.
-
-        Aliases that reassign meaning (``total_score`` -> ``judge_score``) are deliberately absent:
-        built-in adapters now emit canonical names directly, so listing them here would only hide
-        the reassignment warning a third-party adapter needs to see.
+        Which spellings may be rewritten is alias knowledge, so it is asked for rather than
+        restated here: a rewritten name must still resolve through ``get_metric()``, the constraint
+        the ``bertscore`` / ``bert_score`` mismatch broke. Aliases that reassign meaning
+        (``total_score`` -> ``judge_score``) are out of that scope, so no rewrite here can hide the
+        reassignment warning a third-party adapter needs to see.
         """
-        aliases = {'acc', 'f1_score', 'F1', 'em'}
         normalized = []
         for entry in self.metric_list:
             raw_name = entry if isinstance(entry, str) else next(iter(entry), '')
-            if raw_name not in aliases:
+            canonical_name = canonical_metric_list_name(raw_name, self.name)
+            if canonical_name is None:
                 normalized.append(entry)
-                continue
-            canonical_name = migrate_legacy_identity(raw_name, 'identity', benchmark_name=self.name).name
-            if isinstance(entry, str):
+            elif isinstance(entry, str):
                 normalized.append(canonical_name)
             else:
                 normalized.append({canonical_name: entry[raw_name]})
@@ -223,8 +255,7 @@ class BenchmarkMeta:
 
         if self.primary_metric is not None:
             canonical_names = {
-                migrate_legacy_identity(name, self.aggregation, benchmark_name=self.name).name
-                for name in names
+                migrate_legacy_identity(name, self.aggregation, benchmark_name=self.name).name for name in names
             }
             if self.primary_metric.name not in canonical_names:
                 raise ValueError(
@@ -262,13 +293,16 @@ class BenchmarkMeta:
 
     def to_dict(self) -> dict:
         """Convert to dictionary, maintaining backward compatibility."""
-        return self._serialize_models(asdict(self))
+        result = self._serialize_models(asdict(self))
+        result.pop('evaluation_version', None)
+        return result
 
     def to_string_dict(self) -> dict:
         """Convert to string dictionary, excluding data_adapter."""
         cur_dict = copy.deepcopy(self._serialize_models(asdict(self)))
         if 'data_adapter' in cur_dict:
             del cur_dict['data_adapter']
+        cur_dict.pop('evaluation_version', None)
 
         cur_dict['extra_params'] = self.get_extra_params()
         return cur_dict
@@ -288,6 +322,12 @@ class BenchmarkMeta:
         """Update instance with provided arguments, maintaining backward compatibility."""
         args = copy.deepcopy(args)
 
+        protected_fields = {'evaluation_version', 'few_shot_mode', 'allowed_few_shot_nums'}
+        overridden_fields = protected_fields & args.keys()
+        if overridden_fields:
+            fields = ', '.join(sorted(overridden_fields))
+            raise ValueError(f'{fields} must be declared by BenchmarkMeta, not overridden through dataset_args.')
+
         if args.get('local_path'):
             self.dataset_id = args['local_path']
             del args['local_path']
@@ -303,10 +343,9 @@ class BenchmarkMeta:
         # Update fields with validation
         for key, value in args.items():
             if hasattr(self, key):
-                setattr(self, key, value)  # Validate few_shot_num if it's being updated
-                if key == 'few_shot_num' and value < 0:
-                    raise ValueError('few_shot_num must be >= 0')
+                setattr(self, key, value)
 
+        self._validate_few_shot_metadata()
         self._normalize_metric_list()
         self._normalize_primary_metric()
         self._validate_primary_metric()

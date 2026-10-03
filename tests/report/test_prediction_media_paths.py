@@ -1,11 +1,12 @@
-import pytest
 from pathlib import Path
 from typing import List
+
+import pytest
 
 from evalscope.api.evaluator import ReviewResult
 from evalscope.api.messages import ChatMessageUser, ContentImage, ContentText
 from evalscope.api.metric import SampleScore, Score
-from evalscope.utils.data_utils import _serialize_messages
+from evalscope.report.data_frames import _serialize_messages
 
 
 def _review_result(image: str) -> ReviewResult:

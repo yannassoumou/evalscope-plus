@@ -111,11 +111,14 @@ class OpenAIResponsesPlugin(DefaultApiPlugin):
                             chunk = _extract_sse_data(message)
                             if not chunk:
                                 continue
-                            if chunk == '[DONE]':
+
+                            # Skip non-JSON payloads (stream terminators like "[DONE]"), not data chunks.
+                            try:
+                                payload = json.loads(chunk)
+                            except json.JSONDecodeError:
                                 continue
 
                             timestamp = time.perf_counter()
-                            payload = json.loads(chunk)
                             event_type = payload.get('type')
                             delta = payload.get('delta') or ''
                             if event_type in _DELTA_EVENT_TYPES and delta:
@@ -214,6 +217,9 @@ class OpenAIResponsesPlugin(DefaultApiPlugin):
             payload.update(param.extra_args)
         return payload
 
+    def set_request_max_tokens(self, request: Dict, max_tokens: int) -> None:
+        request['max_output_tokens'] = max_tokens
+
     def _count_input_tokens(self, request_str: str) -> int:
         request = json.loads(request_str)
         input_value = request.get('input', '')
@@ -258,7 +264,8 @@ _DELTA_EVENT_TYPES = {
 
 def _extract_sse_data(message: str) -> str:
     data_lines = []
-    for line in message.splitlines():
+    # SSE lines use CR/LF only; preserve other Unicode line separators in JSON.
+    for line in message.split('\n'):
         line = line.strip()
         if not line or line.startswith(':'):
             continue

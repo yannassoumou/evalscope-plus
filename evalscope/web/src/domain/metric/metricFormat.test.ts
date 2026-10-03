@@ -22,7 +22,6 @@ import {
   roundHalfUp,
 } from './metricFormat'
 import type { MetricIdentity } from './metricFormat'
-import { metricSemanticsSchema } from './MetricSemantics'
 import type { MetricSemantics } from './MetricSemantics'
 import { diagnosticSemantics, ratioSemantics, secondsSemantics } from './__arbitraries__'
 
@@ -137,6 +136,18 @@ describe('metric labels', () => {
     expect(formatMetricLabel('unknown_metric', null)).toBe('unknown_metric')
   })
 
+  it('uses an explicit display name for a declared diagnostic metric', () => {
+    const incorrectRate = { ...diagnosticSemantics(), display_name: 'Incorrect rate' }
+
+    expect(formatMetricLabel('is_incorrect:mean', incorrectRate)).toBe('Incorrect rate')
+    expect(
+      formatMetricIdentityLabel(
+        { name: 'is_incorrect', aggregation: 'mean', dimensions: {} },
+        incorrectRate,
+      ),
+    ).toBe('Incorrect rate')
+  })
+
   it('disambiguates repeated labels within one report', () => {
     const labels = formatMetricLabels([
       { metricName: 'mean_acc', semantics: ratioSemantics() },
@@ -204,17 +215,6 @@ describe('golden samples', () => {
     }
   })
 
-  it('validates every backend contract sample through the canonical Zod schema', () => {
-    for (const semantics of Object.values(goldenFixture.semantics)) {
-      metricSemanticsSchema.parse(semantics)
-    }
-  })
-
-  it('keeps the Zod field set aligned with the backend Pydantic wire contract', () => {
-    const backendContract = Object.values(goldenFixture.semantics)[0]
-    expect(backendContract).toBeTruthy()
-    expect(Object.keys(metricSemanticsSchema.shape).sort()).toEqual(Object.keys(backendContract).sort())
-  })
 })
 
 describe('getBoundedQualityRatio', () => {

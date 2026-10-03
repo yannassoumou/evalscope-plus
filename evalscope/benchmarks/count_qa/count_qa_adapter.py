@@ -44,7 +44,7 @@ well-separated objects.
   rule the paper states for its rewriter LLM. A reply with no digit scores 0, so `max_tokens` must
   leave the model room to reach its answer; a model that narrates its count ("row 1 has 3 ...") is
   scored on the first number it mentions rather than on its stated total
-- Scoring is deterministic arithmetic and needs no LLM judge: keep `judge_strategy` at `rule` or
+- Scoring is deterministic arithmetic and needs no LLM judge: keep `judge.strategy` at `rule` or
   `auto`, since `llm` replaces both metrics with a generic judge score. To read a different number
   out of a model that ignores the output format, prepend a per-run filter such as
   `filters={'regex': {'regex_pattern': '(\\d+)', 'group_select': -1}}` (last number) via
@@ -158,8 +158,10 @@ class CountQAAdapter(VisionLanguageAdapter):
             predicted_count = int(filtered_prediction)
             exact = float(predicted_count == reference_count)
             # A ground truth of 0 has no meaningful relative tolerance, so it stays exact.
-            relaxed = exact if reference_count == 0 else float(
-                abs(predicted_count - reference_count) <= RELAXED_TOLERANCE * reference_count
+            relaxed = (
+                exact
+                if reference_count == 0
+                else float(abs(predicted_count - reference_count) <= RELAXED_TOLERANCE * reference_count)
             )
         else:
             exact = relaxed = 0.0

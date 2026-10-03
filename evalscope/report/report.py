@@ -1,46 +1,131 @@
 import json
 import os
-import pandas as pd
+import re
 from collections import defaultdict
-from pydantic import BaseModel, ConfigDict, Field, computed_field, field_serializer, field_validator, model_validator
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+
+import pandas as pd
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_serializer, field_validator, model_validator
 from typing_extensions import Self
 
+from evalscope.api.metric import JudgeSummary
 from evalscope.api.metric.semantics import MetricIdentity, MetricKind, MetricSemantics
 from evalscope.metrics import macro_mean, micro_mean
 from evalscope.utils import get_logger
 from evalscope.utils.argument_utils import get_secret_value
 
 if TYPE_CHECKING:
+    from evalscope.api.benchmark import BenchmarkMeta
     from evalscope.config import TaskConfig
+    from evalscope.evaluation_versioning import BenchmarkEvaluationIdentity, ResolvedBenchmarkSpec
 
 logger = get_logger()
 
-ANALYSIS_PROMPT = """You are an expert AI model evaluator. Analyze the following JSON evaluation results and produce a concise, structured analysis report.
+ANALYSIS_PROMPT = """You are an expert AI model evaluator. Analyze the benchmark context and aggregated evaluation scores below and produce a concise, structured analysis report.
 
 The report must contain exactly four sections with second-level Markdown headers (##):
 
 ## Overall Performance
-Summarize the model's general performance across all evaluated benchmarks and metrics.
+Explain the benchmark's task goal and summarize the model's performance across its reported scores.
 
 ## Key Metrics Analysis
-Break down individual metrics. If multiple metrics are present, categorize them into *Low*, *Medium*, and *High* performance tiers and present the breakdown in a Markdown table.
+Break down scores by metric, category, and subset where available. If multiple metrics are present, categorize them into *Low*, *Medium*, and *High* performance tiers and present the breakdown in a Markdown table.
 
 ## Improvement Suggestions
 Provide specific, actionable recommendations to address identified weaknesses or low-scoring areas.
 
 ## Conclusion
-Offer a concise summary of the findings and an overall assessment.
+Offer a concise summary, including material limits of the reported evaluation scope.
 
 Requirements:
 - Output only the report content itself — no preamble, commentary, or closing remarks.
 - Write the report in {language}.
 - Keep the report focused and avoid unnecessary repetition.
+- Assess only the provided evaluation scores; do not infer performance metrics or undocumented benchmark details.
 
 ```json
-{report_str}
+{analysis_context}
 ```
 """
+
+
+class BenchmarkAnalysisContext(BaseModel):
+    """Compact benchmark and score data supplied to report analysis."""
+
+    benchmark: Dict[str, Any]
+    resolved_benchmark: Dict[str, Any]
+    results: Dict[str, Any]
+
+
+def build_analysis_context(
+    meta: 'BenchmarkMeta',
+    spec: 'ResolvedBenchmarkSpec',
+    identity: 'BenchmarkEvaluationIdentity',
+    report: 'Report',
+) -> BenchmarkAnalysisContext:
+    """Build report-analysis input without documentation-only metadata or perf metrics."""
+    overview, task_description = _description_sections(meta.description or '')
+    return BenchmarkAnalysisContext(
+        benchmark={
+            'name': meta.name,
+            'pretty_name': meta.pretty_name,
+            'evaluation_version': identity.evaluation_version,
+            'overview': overview,
+            'task_description': task_description,
+        },
+        resolved_benchmark=spec.model_dump(mode='json'),
+        results=_score_summary(report),
+    )
+
+
+def _description_sections(description: str) -> tuple[str, str]:
+    sections: Dict[str, list[str]] = {'Overview': [], 'Task Description': []}
+    current: Optional[str] = None
+    for line in description.splitlines():
+        heading = re.fullmatch(r'##\s+(.+?)\s*', line)
+        if heading:
+            current = heading.group(1) if heading.group(1) in sections else None
+            continue
+        if current is not None:
+            sections[current].append(line)
+    return '\n'.join(sections['Overview']).strip(), '\n'.join(sections['Task Description']).strip()
+
+
+def _score_summary(report: 'Report') -> Dict[str, Any]:
+    """Return only score aggregates relevant to a benchmark analysis."""
+    return {
+        'primary_metric_identity': (
+            report.primary_metric_identity.model_dump(mode='json') if report.primary_metric_identity else None
+        ),
+        'metrics': [
+            {
+                'name': metric.name,
+                'identity': metric.identity.model_dump(mode='json'),
+                'num': metric.num,
+                'score': metric.score,
+                'macro_score': metric.macro_score,
+                'categories': [
+                    {
+                        'name': list(category.name),
+                        'num': category.num,
+                        'score': category.score,
+                        'macro_score': category.macro_score,
+                        'subsets': [
+                            {
+                                'name': subset.name,
+                                'num': subset.num,
+                                'score': subset.score,
+                                'is_aggregate': subset.is_aggregate,
+                            }
+                            for subset in category.subsets
+                        ],
+                    }
+                    for category in metric.categories
+                ],
+            }
+            for metric in report.metrics
+        ],
+    }
 
 
 def normalize_score(score: Union[float, dict, int], keep_num: int = 4) -> Union[float, dict]:
@@ -91,7 +176,7 @@ class Category(BaseModel):
     @classmethod
     def _coerce_name_to_tuple(cls, v) -> Tuple[str, ...]:
         if isinstance(v, str):
-            return (v, )
+            return (v,)
         return tuple(v)
 
     @field_serializer('name')
@@ -125,6 +210,7 @@ class Metric(BaseModel):
     @classmethod
     def _migrate_v1_shape(cls, data: Any) -> Any:
         from evalscope.metrics.semantics.migration import migrate_legacy_metric_payload
+
         return migrate_legacy_metric_payload(data)
 
     @model_validator(mode='after')
@@ -159,6 +245,24 @@ class ReportKey:
     overall_score = 'OVERALL'
 
 
+class ExecutionSubset(BaseModel):
+    """Completion counts for one evaluated subset."""
+
+    requested: int = 0
+    succeeded: int = 0
+    errored: int = 0
+
+
+class ExecutionSummary(BaseModel):
+    """Run completeness kept separate from aggregation-specific metric counts."""
+
+    requested: int = 0
+    succeeded: int = 0
+    errored: int = 0
+    incomplete: bool = False
+    subsets: Dict[str, ExecutionSubset] = Field(default_factory=dict)
+
+
 class Report(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
@@ -173,11 +277,18 @@ class Report(BaseModel):
     # compare=False equivalent: excluded from model equality via model_config
     perf_metrics: Optional[Dict[str, Any]] = Field(default=None)
     primary_metric_identity: Optional[MetricIdentity] = None
+    primary_metric_unavailable_reason: Optional[str] = None
+    """Why the declared primary metric was not emitted for this run, if applicable."""
+    judge_summary: Optional[JudgeSummary] = None
+    """Run-level Native Judge coverage and failure summary, when this report used a judge."""
+    execution_summary: Optional[ExecutionSummary] = None
+    """Run completion status. Absent in reports written before completeness tracking."""
 
     @model_validator(mode='before')
     @classmethod
     def _migrate_v1_shape(cls, data: Any) -> Any:
         from evalscope.metrics.semantics.migration import migrate_legacy_report_payload
+
         return migrate_legacy_report_payload(data)
 
     @model_validator(mode='after')
@@ -185,6 +296,8 @@ class Report(BaseModel):
         if self.schema_version != 2:
             raise ValueError(f'unsupported report schema_version={self.schema_version}')
         if self.primary_metric_identity is not None:
+            if self.primary_metric_unavailable_reason is not None:
+                raise ValueError('primary_metric_unavailable_reason requires no primary_metric_identity')
             matches = [metric for metric in self.metrics if metric.identity == self.primary_metric_identity]
             if len(matches) != 1:
                 raise ValueError('primary_metric_identity must match exactly one report metric')
@@ -223,14 +336,16 @@ class Report(BaseModel):
         return self._find_primary_metric()
 
     @property
-    def score(self) -> float:
-        """Compatibility score derived from the primary or first available metric.
+    def score(self) -> Optional[float]:
+        """Score of this report's primary metric.
 
-        Report v2 serializes the structured metric list and primary identity instead of this
-        convenience value.
+        ``None`` when no primary metric was resolved or the report carries no metric: a report that
+        could not name its conclusion did not score zero. It never falls back to the first metric,
+        which may be a diagnostic such as a token count and would misreport the run. Report v2
+        serializes the structured metric list and primary identity instead of this convenience value.
         """
-        metric = self._find_primary_metric() or (self.metrics[0] if self.metrics else None)
-        return metric.score if metric is not None else 0.0
+        metric = self._find_primary_metric()
+        return metric.score if metric is not None else None
 
     def to_dict(self) -> Dict[str, Any]:
         # model_dump includes computed_field 'num' automatically
@@ -257,9 +372,11 @@ class Report(BaseModel):
         if is_v2:
             return report
         from evalscope.metrics.semantics import hydrate_report_semantics
+
         report = hydrate_report_semantics(report)
         if report.perf_metrics:
             from evalscope.metrics.semantics import attach_perf_semantics
+
             report.perf_metrics = attach_perf_semantics(report.perf_metrics)
         return report
 
@@ -288,14 +405,19 @@ class Report(BaseModel):
         Returns:
             pd.DataFrame: The report as a pandas DataFrame.
         """
+        if not self.metrics:
+            return pd.DataFrame()
+
         table = defaultdict(list)
         for metric in self.metrics:
             metric_count = 0
+            has_overall_subset = False
             for category in metric.categories:
                 for subset in category.subsets:
                     if subset.is_aggregate and not include_aggregate:
                         continue
                     metric_count += 1
+                    has_overall_subset = has_overall_subset or subset.name == ReportKey.overall_score
                     table[ReportKey.model_name].append(self.model_name)
                     table[ReportKey.dataset_name].append(self.dataset_name)
                     table[ReportKey.metric_name].append(metric.name)
@@ -304,13 +426,11 @@ class Report(BaseModel):
                     table[ReportKey.num].append(subset.num)
                     table[ReportKey.score].append(subset.score)
             # add overall metric when there are multiple subsets
-            if metric_count > 1 and add_overall_metric and (
-                ReportKey.overall_score not in table[ReportKey.subset_name]
-            ):
+            if metric_count > 1 and add_overall_metric and not has_overall_subset:
                 table[ReportKey.model_name].append(self.model_name)
                 table[ReportKey.dataset_name].append(self.dataset_name)
                 table[ReportKey.metric_name].append(metric.name)
-                table[ReportKey.category_name].append(('-', ))
+                table[ReportKey.category_name].append(('-',))
                 table[ReportKey.subset_name].append(ReportKey.overall_score)
                 table[ReportKey.num].append(metric.num)
                 table[ReportKey.score].append(metric.score)
@@ -328,23 +448,26 @@ class Report(BaseModel):
         # multi-level aggregation for categories
         max_depth = df_categories[ReportKey.category_name].apply(len).max()
         for level in range(max_depth):
-            df_categories[f'{ReportKey.category_prefix}{level}'] = df_categories[
-                ReportKey.category_name].apply(lambda x: x[level] if len(x) > level else None)
+            df_categories[f'{ReportKey.category_prefix}{level}'] = df_categories[ReportKey.category_name].apply(
+                lambda x: x[level] if len(x) > level else None
+            )
 
         df_categories.drop(columns=[ReportKey.category_name], inplace=True)
         return df_categories
 
-    def generate_analysis(self, task_config: 'TaskConfig') -> str:
+    def generate_analysis(self, task_config: 'TaskConfig', analysis_context: 'BenchmarkAnalysisContext') -> str:
+        """Generate score analysis from compact benchmark context and report aggregates."""
         from evalscope.constants import DEFAULT_LANGUAGE
         from evalscope.metrics import LLMJudge
 
         try:
             language = 'English' if DEFAULT_LANGUAGE == 'en' else 'Chinese'
 
-            # Use judge_model_args if configured; otherwise fall back to the task's own model settings
-            if task_config.judge_model_args:
-                judge_model_args = get_secret_value(task_config.judge_model_args)
-                judge_llm = LLMJudge(**judge_model_args)
+            # Reuse the primary judge's transport configuration without making analysis part of
+            # the scoring process.
+            if task_config.judge.models:
+                judge_model_config = task_config.judge.models[0].model_dump(exclude={'judge_id'}, exclude_none=True)
+                judge_llm = LLMJudge(**get_secret_value(judge_model_config))
             else:
                 judge_llm = LLMJudge(
                     api_key=get_secret_value(task_config.api_key),
@@ -353,17 +476,16 @@ class Report(BaseModel):
                     eval_type=task_config.eval_type,
                 )
 
-            prompt = ANALYSIS_PROMPT.format(language=language, report_str=self.to_json_str())
-            response = judge_llm.judge(prompt)
-            if response.startswith('[ERROR]'):
-                logger.warning(f'Analysis generation failed, skipping: {response}')
-                response = 'N/A'
+            context_json = json.dumps(analysis_context.model_dump(mode='json'), ensure_ascii=False, indent=2)
+            prompt = ANALYSIS_PROMPT.format(language=language, analysis_context=context_json)
+            from evalscope.api.messages import ChatMessageUser
+
+            response = judge_llm.generate([ChatMessageUser(content=prompt)]).completion
+            if DEFAULT_LANGUAGE == 'en':
+                disclaimer = f'> *Generated by {judge_llm.model_id}, for reference only.*'
             else:
-                if DEFAULT_LANGUAGE == 'en':
-                    disclaimer = f'> *Generated by {judge_llm.model_id}, for reference only.*'
-                else:
-                    disclaimer = f'> *由 {judge_llm.model_id} 生成，仅供参考。*'
-                response = f'{disclaimer}\n\n{response}'
+                disclaimer = f'> *由 {judge_llm.model_id} 生成，仅供参考。*'
+            response = f'{disclaimer}\n\n{response}'
         except Exception as e:
             logger.error(f'Error generating analysis: {e}')
             response = 'N/A'

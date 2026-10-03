@@ -3,17 +3,19 @@ import json
 import sys
 import tempfile
 import zipfile
-from dotenv import dotenv_values, load_dotenv
 from pathlib import Path
 from types import ModuleType
 from unittest.mock import Mock, patch
+
+from dotenv import dotenv_values, load_dotenv
 
 load_dotenv('.env')
 
 env = dotenv_values('.env')
 
-import numpy as np
 import unittest
+
+import numpy as np
 
 from evalscope.api.agent import NativeAgentConfig
 from evalscope.api.agent.mcp import MCPServerConfigStdio
@@ -44,8 +46,8 @@ from evalscope.benchmarks.toolathlon.toolathlon_adapter import ToolathlonAdapter
 from evalscope.config import SandboxTaskConfig, TaskConfig
 from evalscope.constants import EvalType, JudgeStrategy, OutputType
 from evalscope.models.mockllm import MockLLM
+from evalscope.report.data_frames import get_model_prediction
 from evalscope.run import run_task
-from evalscope.utils.data_utils import get_model_prediction
 from evalscope.utils.logger import get_logger
 from tests.common import TestBenchmark
 
@@ -105,8 +107,7 @@ class TestAgentBenchmark(TestBenchmark):
                 },
                 'stream': True
             },
-            'judge_strategy': JudgeStrategy.AUTO,
-            'judge_model_args': {
+            'judge': {'strategy': JudgeStrategy.AUTO, 'models': {
                 'model_id': 'qwen3-max',
                 'api_url': 'https://dashscope.aliyuncs.com/compatible-mode/v1',
                 'api_key': env.get('DASHSCOPE_API_KEY'),
@@ -116,7 +117,7 @@ class TestAgentBenchmark(TestBenchmark):
                         'enable_thinking': False
                     }
                 }
-            },
+            }},
             'debug': True,
         }
 
@@ -131,7 +132,7 @@ class TestAgentBenchmark(TestBenchmark):
             'work_dir': 'outputs/test_agent_browsecomp',
         }
         if not env.get('DASHSCOPE_API_KEY'):
-            config_overrides['judge_strategy'] = JudgeStrategy.RULE
+            config_overrides['judge'] = {'strategy': JudgeStrategy.RULE}
 
         self._run_dataset_test('browsecomp', **config_overrides)
 
@@ -146,7 +147,7 @@ class TestAgentBenchmark(TestBenchmark):
             'collect_perf': False,
             'debug': False,
             'eval_batch_size': 1,
-            'judge_strategy': JudgeStrategy.RULE,
+            'judge': {'strategy': JudgeStrategy.RULE},
             'limit': 1,
             'no_timestamp': True,
             'work_dir': 'outputs/test_agent_deepsearchqa',
@@ -439,7 +440,7 @@ class TestAgentBenchmark(TestBenchmark):
             eval_batch_size=1,
             collect_perf=False,
             debug=False,
-            judge_model_args={
+            judge={'models': {
                 'model_id': 'qwen-plus',
                 'api_url': 'https://dashscope.aliyuncs.com/compatible-mode/v1',
                 'api_key': env.get('DASHSCOPE_API_KEY'),
@@ -449,7 +450,7 @@ class TestAgentBenchmark(TestBenchmark):
                         'enable_thinking': False
                     }
                 }
-            },
+            }},
             agent_config=NativeAgentConfig(
                 mcp_servers=[
                     MCPServerConfigStdio(

@@ -1,10 +1,13 @@
+from typing import Dict, List, Optional
+
 import pandas as pd
 import pytest
 from pydantic import ValidationError
-from typing import Dict, List, Optional
 
-from evalscope.api.metric import AggScore
+from evalscope.api.judge import summarize_judge_runs
+from evalscope.api.metric import AggScore, JudgeSummary, SampleScore, Score
 from evalscope.api.metric.semantics import MetricIdentity, MetricKind, MetricSelector
+from evalscope.constants import ScoreStatus
 from evalscope.metrics.semantics.catalog import LEGACY_METRIC_MIGRATIONS
 from evalscope.metrics.semantics.entry import MetricEntry
 from evalscope.metrics.semantics.migration import migrate_legacy_report_identity
@@ -77,9 +80,14 @@ def test_collection_report_keeps_mixed_metrics_without_primary() -> None:
     assert all(metric.semantics.kind is MetricKind.QUALITY for metric in report.metrics)
     assert report.primary_metric is None
     assert report.primary_metric_identity is None
+    assert report.score is None
+    assert report.primary_metric_unavailable_reason == (
+        'The collection contains multiple scored metrics, so no single primary metric is selected.'
+    )
+    assert Report.from_dict(report.to_dict()).primary_metric_unavailable_reason == report.primary_metric_unavailable_reason
 
 
-def test_report_score_compatibility_prefers_primary_then_first_metric() -> None:
+def test_report_score_comes_only_from_the_primary_metric() -> None:
     report = _report()
     assert report.score == 0.8
 
@@ -97,8 +105,28 @@ def test_report_score_compatibility_prefers_primary_then_first_metric() -> None:
         'model',
     )
     assert collection.score == 0.6
-    assert Report().score == 0.0
+    # A report with no metric produced no score; it did not score zero.
+    assert Report().score is None
     assert 'score' not in report.to_dict()
+
+
+def test_score_is_absent_rather_than_taken_from_a_diagnostic_metric() -> None:
+    """Falling back to the first metric would present a token count as the run's score."""
+    report = ReportGenerator.generate_report(
+        {
+            'test': [
+                AggScore(score=7.0, metric_name='no_answer_num', aggregation='mean', num=10),
+                AggScore(score=0.9, metric_name='yes_ratio', aggregation='mean', num=10),
+            ]
+        },
+        'model',
+        _StubAdapter('diagnostics_only'),
+    )
+
+    assert [metric.identity.name for metric in report.metrics] == ['no_answer_num', 'yes_ratio']
+    assert report.primary_metric is None
+    assert report.score is None
+    assert report.num == 10
 
 
 def test_num_counts_one_metric_even_without_a_resolved_primary() -> None:
@@ -115,6 +143,21 @@ def test_num_counts_one_metric_even_without_a_resolved_primary() -> None:
     assert report.num == 10
 
 
+def test_missing_declared_primary_is_reported_without_substituting_a_score() -> None:
+    report = ReportGenerator.generate_report(
+        {'test': [AggScore(score=1.0, metric_name='error_acc', aggregation='identity', num=1)]},
+        'model',
+        _StubAdapter('process_bench', MetricSelector(name='simple_f1_score')),
+    )
+
+    assert report.primary_metric is None
+    assert report.primary_metric_identity is None
+    assert report.score is None
+    assert report.primary_metric_unavailable_reason is not None
+    assert 'simple_f1_score' in report.primary_metric_unavailable_reason
+    assert report.num == 1
+
+
 def test_v2_serialization_contains_no_v1_metric_fields() -> None:
     data = _report().to_dict()
     assert data['schema_version'] == 2
@@ -124,6 +167,61 @@ def test_v2_serialization_contains_no_v1_metric_fields() -> None:
     for metric in data['metrics']:
         assert set(('name', 'semantic_id')).isdisjoint(metric)
         assert set(('identity', 'semantics')).issubset(metric)
+
+
+def test_report_persists_first_class_judge_summary() -> None:
+    report = _report()
+    report.judge_summary = JudgeSummary(status=ScoreStatus.DEGRADED, scored=8, total=10, coverage=0.8)
+
+    assert report.to_dict()['judge_summary']['coverage'] == 0.8
+
+
+def test_run_judge_summary_keeps_unavailable_samples_out_of_scores() -> None:
+    usable = SampleScore(score=Score(judge_summary=JudgeSummary(
+        status=ScoreStatus.SUCCESS,
+        scored=1,
+        total=1,
+        coverage=1.0,
+        judge_models=['primary'],
+        valid_observations=1,
+        total_observations=1,
+    )))
+    unavailable = SampleScore(score=Score(judge_summary=JudgeSummary(
+        status=ScoreStatus.EXCLUDED,
+        scored=0,
+        total=1,
+        coverage=0.0,
+        judge_models=['primary'],
+        total_observations=1,
+        failures={'parse_error': 1},
+    )))
+
+    summary = summarize_judge_runs([[usable, unavailable]])
+
+    assert summary.status is ScoreStatus.DEGRADED
+    assert (summary.scored, summary.total, summary.coverage) == (1, 2, 0.5)
+    assert summary.failures == {'parse_error': 1}
+
+
+def test_run_judge_summary_preserves_degradation_and_rolls_up_disagreement() -> None:
+    degraded = SampleScore(score=Score(judge_summary=JudgeSummary(
+        status=ScoreStatus.DEGRADED,
+        scored=1,
+        total=1,
+        coverage=1.0,
+        disagreement={
+            'numeric': {'all_observations': {'acc': {'std': 0.2, 'range': 0.5}}},
+            'categorical': {'pair': {'agreement_ratio': 0.5, 'vote_entropy': 1.0}},
+            'position_consistency': 0.5,
+            'swap_flip_count': 1,
+        },
+    )))
+
+    summary = summarize_judge_runs([[degraded]])
+
+    assert summary.status is ScoreStatus.DEGRADED
+    assert summary.disagreement['numeric']['acc'] == {'mean_std': 0.2, 'max_range': 0.5, 'samples': 1}
+    assert summary.disagreement['position_consistency']['swap_flip_count'] == 1
 
 
 def test_v2_round_trip_uses_persisted_semantics_without_resolution() -> None:
@@ -169,6 +267,34 @@ def test_transitional_v1_fields_migrate_to_current_report_shape() -> None:
     assert 'semantic_id' not in report.to_dict()['metrics'][0]
     assert 'metric_schema_version' not in report.to_dict()
     assert 'primary_metric_name' not in report.to_dict()
+
+
+@pytest.mark.parametrize('metric_name', ['accuracy', 'f1', 'precision', 'exact_match', 'pass_rate'])
+def test_v1_canonical_primary_is_resolved_before_validation(metric_name: str) -> None:
+    report = Report.from_dict({
+        'dataset_name': 'legacy_primary_probe',
+        'primary_metric_name': metric_name,
+        'metrics': [{'name': metric_name, 'score': 0.8, 'categories': []}],
+    })
+
+    assert report.score == 0.8
+    assert report.primary_metric_identity == MetricIdentity(name=metric_name, aggregation='identity')
+    assert report.metrics[0].semantics.kind is MetricKind.QUALITY
+    assert Report.from_dict(report.to_dict()) == report
+
+
+def test_v1_diagnostic_override_discards_the_legacy_primary() -> None:
+    report = Report.from_dict({
+        'dataset_name': 'job_bench',
+        'primary_metric_name': 'total_score',
+        'metrics': [{'name': 'total_score', 'score': 7.0, 'categories': []}],
+    })
+
+    assert report.metrics[0].score == 7.0
+    assert report.metrics[0].semantics.kind is MetricKind.DIAGNOSTIC
+    assert report.primary_metric_identity is None
+    assert report.score is None
+    assert Report.from_dict(report.to_dict()) == report
 
 
 def test_v1_report_migrates_without_changing_values() -> None:
@@ -296,6 +422,18 @@ def test_unknown_valid_third_party_identity_can_be_written_as_diagnostic() -> No
 def test_multi_scored_report_without_selector_fails() -> None:
     with pytest.raises(ValueError, match='declare BenchmarkMeta.primary_metric'):
         ReportGenerator.generate_report(_scores(), 'model', _StubAdapter('conll2003'))
+
+
+def test_fresh_report_rejects_a_diagnostic_primary() -> None:
+    with pytest.raises(ValueError, match='matched diagnostic identity'):
+        ReportGenerator.generate_report(
+            {'test': [
+                AggScore(score=0.8, metric_name='accuracy', aggregation='mean', num=1),
+                AggScore(score=7.0, metric_name='no_answer_num', aggregation='mean', num=1),
+            ]},
+            'model',
+            _StubAdapter('benchmark', MetricSelector(name='no_answer_num')),
+        )
 
 
 def test_selector_must_match_exactly_one_identity() -> None:
@@ -457,9 +595,22 @@ def test_agg_score_rejects_invalid_explicit_structure(fields) -> None:
         AggScore(score=1.0, metric_name='accuracy', **fields)
 
 
-def test_agg_score_only_normalizes_overlap_metric_syntax() -> None:
+def test_agg_score_structures_overlap_metric_syntax_for_primary_selection() -> None:
     bleu = AggScore(score=0.5, metric_name='bleu-4', aggregation='mean')
     rouge = AggScore(score=0.5, metric_name='Rouge-L-R', aggregation='mean')
 
-    assert bleu.identity == MetricIdentity(name='bleu_4', aggregation='mean')
-    assert rouge.identity == MetricIdentity(name='rouge_l_r', aggregation='mean')
+    assert bleu.identity == MetricIdentity(name='bleu', aggregation='mean', dimensions={'ngram': 4})
+    assert rouge.identity == MetricIdentity(
+        name='rouge', aggregation='mean', dimensions={'statistic': 'recall', 'variant': 'l'}
+    )
+
+    report = ReportGenerator.generate_report(
+        {'test': [bleu, rouge]},
+        'model',
+        _StubAdapter(
+            'general_qa',
+            MetricSelector(name='rouge', aggregation='mean', dimensions={'statistic': 'recall', 'variant': 'l'}),
+        ),
+    )
+
+    assert report.primary_metric_identity == rouge.identity

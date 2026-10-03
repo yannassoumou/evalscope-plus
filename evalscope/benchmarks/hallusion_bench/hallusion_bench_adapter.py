@@ -55,18 +55,15 @@ HallusionBench is an advanced diagnostic benchmark designed to evaluate image-co
         primary_metric=MetricSelector(
             name='accuracy',
             aggregation='mean',
-            dimensions={
-                'level': 'overall',
-                'target': 'answer'
-            },
+            dimensions={'level': 'overall', 'target': 'answer'},
         ),
         aggregation='mean',
         eval_split='image',
         prompt_template='{question}\nPlease answer YES or NO without an explanation.',
+        evaluation_version='v1.1',
     )
 )
 class HallusionBenchAdapter(VisionLanguageAdapter):
-
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
@@ -91,7 +88,7 @@ class HallusionBenchAdapter(VisionLanguageAdapter):
                 'question_id': record.get('question_id'),
                 'gt_answer': record.get('gt_answer'),
                 'gt_answer_details': record.get('gt_answer_details'),
-            }
+            },
         )
 
     def match_score(self, original_prediction, filtered_prediction, reference, task_state) -> Score:
@@ -118,13 +115,22 @@ class HallusionBenchAdapter(VisionLanguageAdapter):
             groups = defaultdict(list)
             for ss in scores:
                 md = ss.sample_metadata
+                category = md.get('category')
                 subcategory = md.get('subcategory')
                 set_id = md.get('set_id')
-                group_id = md.get('figure_id') if group_type == 'figure' else md.get('question_id')
-                if subcategory is None or set_id is None or group_id is None:
+                figure_id = md.get('figure_id')
+                group_id = figure_id if group_type == 'figure' else md.get('question_id')
+                if category is None or subcategory is None or set_id is None or group_id is None:
                     # Skip incomplete records for this grouping
                     continue
-                key = f'{subcategory}_{set_id}_{group_id}'
+                # Official HallusionBench excludes VS "no-figure" records (figure_id == 0)
+                # from figure-level accuracy: they carry no figure to attribute a group to.
+                if group_type == 'figure' and str(category) == 'VS' and str(figure_id) == '0':
+                    continue
+                # The grouping key must include category. VD and VS reuse the same
+                # subcategory/set_id/figure_id/question_id numbering, so dropping category
+                # merges distinct figures/questions across categories and corrupts the metric.
+                key = f'{category}_{subcategory}_{set_id}_{group_id}'
                 groups[key].append(ss.score.main_value)
             if not groups:
                 return 0.0, 0
@@ -137,18 +143,9 @@ class HallusionBenchAdapter(VisionLanguageAdapter):
             f_acc, f_n = compute_group_accuracy(scores, 'figure')
             q_acc, q_n = compute_group_accuracy(scores, 'question')
             return {
-                'aAcc': {
-                    'score': a_acc,
-                    'num': a_n
-                },
-                'fAcc': {
-                    'score': f_acc,
-                    'num': f_n
-                },
-                'qAcc': {
-                    'score': q_acc,
-                    'num': q_n
-                },
+                'aAcc': {'score': a_acc, 'num': a_n},
+                'fAcc': {'score': f_acc, 'num': f_n},
+                'qAcc': {'score': q_acc, 'num': q_n},
             }
 
         outputs: List[AggScore] = []
@@ -202,10 +199,7 @@ class HallusionBenchAdapter(VisionLanguageAdapter):
                     score=overall[metric]['score'],
                     metric_name='accuracy',
                     aggregation='mean',
-                    dimensions={
-                        'level': 'overall',
-                        'target': target_names[metric]
-                    },
+                    dimensions={'level': 'overall', 'target': target_names[metric]},
                     num=overall[metric]['num'],
                 )
             )

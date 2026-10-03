@@ -4,9 +4,9 @@ import pytest
 from evalscope.api.metric.semantics import MetricIdentity
 from evalscope.metrics.semantics.baselines import SEMANTIC_BASELINES
 from evalscope.report import Category, Metric, Report, ReportRef, Subset
+from evalscope.report.data_frames import get_comparison_quality_report_df, get_quality_report_df
 from evalscope.report.visualization import plot_multi_report_radar, plot_single_report_scores
 from evalscope.service.blueprints.reports import _apply_chart_theme, _build_report_meta, _report_to_service_dict
-from evalscope.utils.data_utils import get_comparison_quality_report_df, get_quality_report_df
 
 
 def test_apply_chart_theme_uses_light_template_for_light_console() -> None:
@@ -55,8 +55,8 @@ def test_build_report_meta_exposes_primary_metric_identity(monkeypatch) -> None:
         primary_metric_identity=identity,
     )
     monkeypatch.setattr(
-        'evalscope.service.blueprints.reports.load_report_bundle',
-        lambda _root, _ref: ([report], ['throughput_suite'], {}),
+        'evalscope.service.blueprints.reports.get_report_list',
+        lambda _paths: [report],
     )
 
     metadata = _build_report_meta(ReportRef(run_id='run', model_id='test-model'), '/tmp')
@@ -100,8 +100,8 @@ def test_build_report_meta_picks_the_primary_identity_not_the_first_metric(monke
         primary_metric_identity=normalized_identity,
     )
     monkeypatch.setattr(
-        'evalscope.service.blueprints.reports.load_report_bundle',
-        lambda _root, _ref: ([report], ['document_suite'], {}),
+        'evalscope.service.blueprints.reports.get_report_list',
+        lambda _paths: [report],
     )
 
     metadata = _build_report_meta(ReportRef(run_id='run', model_id='test-model'), '/tmp')
@@ -121,8 +121,8 @@ def test_build_report_meta_does_not_rank_multiple_datasets(monkeypatch) -> None:
         _semantic_report('f1', 0.6, 'quality.f1.ratio'),
     ]
     monkeypatch.setattr(
-        'evalscope.service.blueprints.reports.load_report_bundle',
-        lambda _root, _ref: (reports, ['accuracy', 'f1'], {}),
+        'evalscope.service.blueprints.reports.get_report_list',
+        lambda _paths: reports,
     )
 
     metadata = _build_report_meta(ReportRef(run_id='run', model_id='test-model'), '/tmp')

@@ -36,6 +36,41 @@ def test_parse_answers_multiple_correct() -> None:
     assert parse_answers(_make_state('reasoning\nANSWER: AB'), multiple_correct=True) == {'A', 'B'}
 
 
+def test_parse_answers_multiple_correct_connector_words() -> None:
+    """'A and B' / 'A or B' list two labels; the connector must not truncate the answer.
+
+    Regression test: the connector used to end the label prefix, so only its first label
+    was scored and the multi-select answer was marked wrong.
+    """
+    assert parse_answers(_make_state('reasoning\nANSWER: A and B'), multiple_correct=True) == {'A', 'B'}
+    assert parse_answers(_make_state('reasoning\nANSWER: B or C'), multiple_correct=True) == {'B', 'C'}
+    assert parse_answers(_make_state('reasoning\nANSWER: A and B and D'), multiple_correct=True) == {'A', 'B', 'D'}
+    assert parse_answers(_make_state('reasoning\nANSWER: A, B and C'), multiple_correct=True) == {'A', 'B', 'C'}
+    assert parse_answers(_make_state('reasoning\nANSWER: A AND B'), multiple_correct=True) == {'A', 'B'}
+    assert parse_answers(_make_state('reasoning\nANSWER: B Or C'), multiple_correct=True) == {'B', 'C'}
+
+
+def test_parse_answers_multiple_correct_slash_and_ideographic_comma() -> None:
+    """A slash or an ideographic comma between labels is a separator, not the end of them."""
+    assert parse_answers(_make_state('reasoning\nANSWER: A/B'), multiple_correct=True) == {'A', 'B'}
+    assert parse_answers(_make_state('reasoning\nANSWER: A/B/C'), multiple_correct=True) == {'A', 'B', 'C'}
+    assert parse_answers(_make_state('reasoning\nANSWER: A、B'), multiple_correct=True) == {'A', 'B'}
+    assert parse_answers(_make_state('reasoning\nANSWER: (A/B)'), multiple_correct=True) == {'A', 'B'}
+
+
+def test_parse_answers_connector_joins_labels_only() -> None:
+    """A connector is stepped over only when another label follows it.
+
+    Otherwise prose naming extra labels ('B, not C', 'A and then B is right') would be
+    swallowed into the answer.
+    """
+    assert parse_answers(_make_state('reasoning\nANSWER: B, not C'), multiple_correct=True) == {'B'}
+    assert parse_answers(_make_state('reasoning\nANSWER: B and not C'), multiple_correct=True) == {'B'}
+    assert parse_answers(_make_state('reasoning\nANSWER: A and then B is right'), multiple_correct=True) == {'A'}
+    assert parse_answers(_make_state('reasoning\nANSWER: A and'), multiple_correct=True) == {'A'}
+    assert parse_answers(_make_state('reasoning\nANSWER: A and no others'), multiple_correct=True) == {'A'}
+
+
 def test_parse_answers_ignores_echoed_prompt_placeholder() -> None:
     """The model may restate the required format before giving the real answer.
 
@@ -87,6 +122,33 @@ def test_parse_answers_wrapped_multiple_answers_full_width_comma() -> None:
     """
     assert parse_answers(_make_state('reasoning\nANSWER: (A，C)'), multiple_correct=True) == {'A', 'C'}
     assert parse_answers_zh(_make_state('推理过程\n答案：（A，C）'), multiple_correct=True) == {'A', 'C'}
+
+
+def test_parse_answers_zh_multiple_correct_slash_and_ideographic_comma() -> None:
+    """An unbracketed slash or ideographic comma between labels is a separator, not the end.
+
+    Mirrors ``test_parse_answers_multiple_correct_slash_and_ideographic_comma`` for the Chinese
+    parser. The plain-label pattern used to stop at ``、`` / ``/``, so a multi-select answer such
+    as ``答案：A、C`` kept only its first label and was scored as wrong.
+    """
+    assert parse_answers_zh(_make_state('推理过程\n答案：A、C'), multiple_correct=True) == {'A', 'C'}
+    assert parse_answers_zh(_make_state('推理过程\n答案：A/C'), multiple_correct=True) == {'A', 'C'}
+    assert parse_answers_zh(_make_state('推理过程\n答案：A、B、D'), multiple_correct=True) == {'A', 'B', 'D'}
+    assert parse_answers_zh(_make_state('推理过程\n答案：A，C'), multiple_correct=True) == {'A', 'C'}
+
+
+def test_parse_answers_zh_multiple_correct_space_separated() -> None:
+    """A space between labels ('A, C', 'A C') does not end a Chinese multi-select answer.
+
+    The English plain-label pattern already allows spaces; the Chinese one stopped at the
+    first space, so '答案：A, C' was read as 'A' and a correct answer was scored as wrong.
+    """
+    assert parse_answers_zh(_make_state('推理过程\n答案：A, C'), multiple_correct=True) == {'A', 'C'}
+    assert parse_answers_zh(_make_state('推理过程\n答案：A C'), multiple_correct=True) == {'A', 'C'}
+    assert parse_answers_zh(_make_state('推理过程\n答案：A, B, D'), multiple_correct=True) == {'A', 'B', 'D'}
+    # Prose after the labels still ends the answer.
+    assert parse_answers_zh(_make_state('推理过程\n答案：A, C 是正确的'), multiple_correct=True) == {'A', 'C'}
+    assert parse_answers_zh(_make_state('推理过程\n答案：B because C is wrong')) == {'B'}
 
 
 def test_parse_answers_ignores_bracketed_prose() -> None:

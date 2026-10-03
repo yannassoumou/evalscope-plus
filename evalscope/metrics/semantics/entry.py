@@ -7,8 +7,9 @@ the dependency runs one way only (contract <- data), which is why nothing here n
 import.
 """
 
-from pydantic import BaseModel, ConfigDict
 from typing import Any, Dict, Optional
+
+from pydantic import BaseModel, ConfigDict
 
 from evalscope.api.metric.semantics import MetricDirection, MetricSemantics, ValueRange
 from evalscope.metrics.semantics.baselines import SEMANTIC_BASELINES
@@ -20,6 +21,7 @@ BASELINE_TABLE_LOCATION = 'evalscope/metrics/semantics/baselines.py::SEMANTIC_BA
 #: to the baseline vocabulary rather than to each catalog entry.
 _ENTRY_OVERRIDE_FIELDS = (
     'metric_name',
+    'display_name',
     'direction',
     'raw_unit',
     'value_range',
@@ -58,6 +60,7 @@ class MetricEntry(BaseModel):
     """Key into the baseline table."""
 
     metric_name: Optional[str] = None
+    display_name: Optional[str] = None
     direction: Optional[MetricDirection] = None
     raw_unit: Optional[str] = None
     value_range: Optional[ValueRange] = None

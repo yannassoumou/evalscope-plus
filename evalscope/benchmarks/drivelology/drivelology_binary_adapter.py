@@ -8,7 +8,6 @@ from evalscope.api.messages import ChatMessageUser, Content, ContentText
 from evalscope.api.metric.scorer import AggScore, SampleScore, Score
 from evalscope.api.registry import register_benchmark
 from evalscope.constants import Tags
-from evalscope.utils.logger import get_logger
 
 DESCRIPTION = """
 ## Overview
@@ -95,8 +94,6 @@ Here are some examples of how to solve similar problems:
 #Your Answer#:
 """.strip()  # noqa: E501
 
-logger = get_logger()
-
 
 @register_benchmark(
     BenchmarkMeta(
@@ -110,19 +107,17 @@ logger = get_logger()
         primary_metric='accuracy',
         aggregation='f1',
         few_shot_num=0,
+        few_shot_mode='fixed',
+        allowed_few_shot_nums=(0, 4),
         eval_split='test',
         prompt_template='{question}',
-        few_shot_prompt_template='{question}'
+        few_shot_prompt_template='{question}',
     )
 )
 class DrivelologyBinaryClassificationAdapter(DefaultDataAdapter):
-
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.add_overall_metric = False
-        if self.few_shot_num not in [0, 4]:
-            logger.warning(f'For DrivelologyBinaryClassification, use 4-shot by default.')
-            self.few_shot_num = 4
 
     def record_to_sample(self, record: Dict[str, Any]) -> Sample:
         if self.few_shot_num > 0:
@@ -131,9 +126,13 @@ class DrivelologyBinaryClassificationAdapter(DefaultDataAdapter):
             prompt = PROMPT_TEMPLATE.format(text=record['text'])
         content_list: List[Content] = [ContentText(text=prompt)]
         answer = 'YES' if str(record['label']) == 'drivelology' else 'NO'  # 'YES' or 'NO'
-        return Sample(input=[ChatMessageUser(content=content_list)], target=answer, metadata={
-            'answer': answer,
-        })
+        return Sample(
+            input=[ChatMessageUser(content=content_list)],
+            target=answer,
+            metadata={
+                'answer': answer,
+            },
+        )
 
     def match_score(self, original_prediction, filtered_prediction, reference, task_state) -> Score:
         score = Score(
@@ -181,7 +180,7 @@ class DrivelologyBinaryClassificationAdapter(DefaultDataAdapter):
                 'precision': precision,
                 'recall': recall,
                 'f1_score': f1_score,
-                'yes_ratio': yes_ratio
+                'yes_ratio': yes_ratio,
             }
 
         overall_metrics = compute_metrics(sample_scores)

@@ -1,7 +1,8 @@
 import os
-import pandas as pd
 import re
 from typing import Dict, List, Optional
+
+import pandas as pd
 
 from evalscope.api.metric.semantics import MetricKind
 from evalscope.constants import DEFAULT_LANGUAGE, PLOTLY_CDN_URL
@@ -85,6 +86,7 @@ def _md_to_html(text: str) -> str:
         return ''
 
     import markdown as md_lib
+
     return md_lib.markdown(text, extensions=['extra'])
 
 
@@ -149,13 +151,15 @@ def _subset_chart_div(
     chart_rows = [row for row in subset_rows if row['quality_score'] is not None]
     if not chart_rows:
         return ''
-    subset_df = pd.DataFrame({
-        ReportKey.subset_name: [row['subset'] for row in chart_rows],
-        ReportKey.metric_name: [row['metric'] for row in chart_rows],
-        ReportKey.score: [row['quality_score'] for row in chart_rows],
-        ReportKey.raw_score: [row['score'] for row in chart_rows],
-        ReportKey.display_score: [row['score_display'] for row in chart_rows],
-    })
+    subset_df = pd.DataFrame(
+        {
+            ReportKey.subset_name: [row['subset'] for row in chart_rows],
+            ReportKey.metric_name: [row['metric'] for row in chart_rows],
+            ReportKey.score: [row['quality_score'] for row in chart_rows],
+            ReportKey.raw_score: [row['score'] for row in chart_rows],
+            ReportKey.display_score: [row['score_display'] for row in chart_rows],
+        }
+    )
     fig = plot_single_dataset_scores(subset_df)
     if fig is None:
         return ''
@@ -237,7 +241,7 @@ def gen_html_report_file(
                     model=model,
                     metric=metric_labels.get(primary_metric.name, primary_metric.name) if primary_metric else 'N/A',
                     metric_raw=primary_metric.name if primary_metric else 'N/A',
-                    score=score if score is not None else 0.0,
+                    score=score,
                     score_display=format_metric_value(score, semantics),
                     num=primary_metric.num if primary_metric else 0,
                 )
@@ -248,13 +252,15 @@ def gen_html_report_file(
             metric_labels = format_metric_labels((item.identity, item.semantics) for item in first.metrics)
             quality_score = bounded_quality_ratio(metric.score, metric.semantics)
             if quality_score is not None:
-                overview_chart_rows.append({
-                    ReportKey.dataset_name: pretty,
-                    ReportKey.metric_name: metric_labels.get(metric.name, metric.name),
-                    ReportKey.score: quality_score,
-                    ReportKey.raw_score: metric.score,
-                    ReportKey.display_score: format_metric_value(metric.score, metric.semantics),
-                })
+                overview_chart_rows.append(
+                    {
+                        ReportKey.dataset_name: pretty,
+                        ReportKey.metric_name: metric_labels.get(metric.name, metric.name),
+                        ReportKey.score: quality_score,
+                        ReportKey.raw_score: metric.score,
+                        ReportKey.display_score: format_metric_value(metric.score, metric.semantics),
+                    }
+                )
 
     overview_chart_div = _overview_chart_div(overview_chart_rows)
     sunburst_chart_div = _sunburst_chart_div(report_list)
@@ -268,7 +274,7 @@ def gen_html_report_file(
         info = dataset_info[ds]
         pretty = info['pretty_name']
         model_sections: List[dict] = []
-        overall_score = 0.0
+        overall_score: Optional[float] = None
         overall_score_display = format_metric_value(overall_score, None)
 
         for model in all_models:
@@ -276,7 +282,7 @@ def gen_html_report_file(
             if rpt is None:
                 continue
             primary_metric = rpt.primary_metric
-            overall_score = primary_metric.score if primary_metric else 0.0
+            overall_score = primary_metric.score if primary_metric else None
             overall_score_display = format_metric_value(
                 primary_metric.score if primary_metric else None,
                 primary_metric.semantics if primary_metric else None,
@@ -290,7 +296,7 @@ def gen_html_report_file(
                         diagnostic_rows=[],
                         show_category=False,
                         chart_div='',
-                        analysis_html=''
+                        analysis_html='',
                     )
                 )
                 continue

@@ -1,6 +1,7 @@
 # flake8: noqa: E501
 """Helpers for the HiPhO physics Olympiad benchmark: prompts, marking-scheme
 parsing, boxed-answer extraction, and judge-response parsing."""
+
 import re
 from typing import List
 
@@ -65,11 +66,8 @@ Special considerations:
 Question: {question}
 Output sentence: {given_answer}
 Correct answer: {ground_truth}
-Final Instruction:
-You must respond with exactly one of the following: [Correct] or [Incorrect].
-Do NOT include any explanation, reasoning, or additional text.
-Any deviation from this format (even a single word) will be considered INVALID.
-Judgement: """
+Judge whether the output sentence correctly answers the question.
+"""
 
 # Step-level judge (HiPhO paper, Appendix B.3). The criterion text itself states the
 # points to award, so the judge returns the awarded points as a single number.
@@ -84,21 +82,14 @@ Instructions:
 1. Analyze the student's solution for physics concepts, mathematical derivations, and calculations.
 2. Award points strictly according to the criterion.
 3. Consider both conceptual understanding and technical accuracy.
-Critical:
-1. You MUST respond with ONLY a single number (e.g., 1.0, 0.5, 0.0).
-2. NO explanations, NO text, NO reasoning - JUST THE NUMBER.
-3. If you provide any text other than the number, your response will be invalid.
-Score: """
+Award points strictly according to the criterion.
+"""
 
 # Every criterion states its own allocation, e.g. "Award 0.1 pt if ..." or "得 0.5 分".
 _CRITERION_POINTS_RE = re.compile(
     r'(?:award|給|给|得|扣)\s*\$?\s*([0-9]*\.?[0-9]+)\s*\$?\s*(?:pts?|points?|分)',
     re.IGNORECASE,
 )
-_JUDGE_NUMBER_RE = re.compile(r'-?[0-9]*\.?[0-9]+')
-
-# Sentinel that ``LLMJudge.judge`` returns instead of raising on a failed request.
-JUDGE_ERROR_PREFIX = '[ERROR]'
 
 
 def is_chinese_exam(source: str) -> bool:
@@ -130,84 +121,14 @@ def criterion_points(criterion: str) -> float:
     return max(values) if values else 0.0
 
 
-def parse_judge_points(response: str, max_points: float) -> float:
-    """Parse the awarded points from a step-level judge response.
-
-    The judge is instructed to return a bare number; the first number in the
-    response is used and clamped to ``[0, max_points]`` so a malformed judge
-    reply can never inflate or deflate a criterion beyond its allocation.
-
-    A failed judge request must score 0, never full credit: ``LLMJudge.judge``
-    reports failures as an ``[ERROR] ...`` string that embeds the model id and
-    endpoint, whose digits would otherwise be parsed as an awarded score.
-    """
-    if not response or response.startswith(JUDGE_ERROR_PREFIX):
-        return 0.0
-    match = _JUDGE_NUMBER_RE.search(response)
-    if not match:
-        return 0.0
-    return max(0.0, min(float(match.group()), max_points))
-
-
-def parse_judge_correct(response: str) -> bool:
-    """Parse a ``[Correct]`` / ``[Incorrect]`` answer-level judge verdict."""
-    if not response or response.startswith(JUDGE_ERROR_PREFIX):
-        return False
-    text = response.lower()
-    if '[incorrect]' in text:
-        return False
-    if '[correct]' in text:
-        return True
-    # Fall back to a bare token when the judge omits the brackets.
-    return bool(re.search(r'\bcorrect\b', text)) and 'incorrect' not in text
-
-
 def extract_boxed_answers(text: str) -> List[str]:
-    """Extract the contents of every complete ``\\boxed{...}`` in order of appearance.
+    """Delegate boxed extraction upstream while preserving subquestion order."""
+    from evalscope.metrics.math.parser import extract_boxed_answers as extract
 
-    Brace matching is used so nested braces inside a boxed expression (e.g.
-    ``\\boxed{\\frac{1}{2}}``) are captured correctly. A trailing unbalanced
-    ``\\boxed{`` is ignored rather than reported as a partial answer: it means the
-    reply was truncated mid-answer, and emitting the fragment would both invent an
-    answer and shift the ordered alignment that answer-level scoring relies on.
-    """
-    answers: List[str] = []
-    idx = 0
-    needle = r'\boxed'
-    while True:
-        pos = text.find(needle, idx)
-        if pos == -1:
-            break
-        brace = text.find('{', pos)
-        if brace == -1:
-            break
-        depth = 0
-        content = []
-        i = brace
-        while i < len(text):
-            char = text[i]
-            if char == '{':
-                depth += 1
-                if depth == 1:
-                    i += 1
-                    continue
-            elif char == '}':
-                depth -= 1
-                if depth == 0:
-                    break
-            content.append(char)
-            i += 1
-        if depth != 0:
-            # Unterminated brace: the rest of the reply is truncated, so stop here.
-            break
-        answers.append(''.join(content).strip())
-        idx = i + 1
-    return answers
+    return extract(text)
 
 
 def strip_boxed(text: str) -> str:
-    """Return the inner expression of a single ``\\boxed{...}`` payload if present."""
+    """Return the last boxed payload, or an already unboxed answer."""
     boxed = extract_boxed_answers(text)
-    if boxed:
-        return boxed[-1]
-    return text.strip()
+    return boxed[-1] if boxed else text.strip()

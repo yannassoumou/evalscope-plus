@@ -1,21 +1,38 @@
 # Copyright (c) Alibaba, Inc. and its affiliates.
 
-from typing import Any, Dict, Set
+from pydantic import BaseModel
+from typing import Any, Dict, List, Literal
 
 from evalscope.api.benchmark import BenchmarkMeta, DefaultDataAdapter
 from evalscope.api.dataset import Sample
 from evalscope.api.evaluator import TaskState
+from evalscope.api.judge import (
+    CaseVerdict,
+    JudgeCase,
+    JudgeContext,
+    JudgeDefinition,
+    JudgeRequest,
+    OutputContract,
+    ReducedVerdict,
+)
+from evalscope.api.messages import ChatMessageUser
 from evalscope.api.metric import Score
 from evalscope.api.registry import register_benchmark
-from evalscope.constants import Tags
+from evalscope.constants import ScoringPolicy, Tags
 from evalscope.utils.logger import get_logger
 
 # flake8: noqa
 
 logger = get_logger()
 
-# Punctuation and markdown a judge may wrap its bare "Yes"/"No" verdict in.
-VERDICT_WRAPPER_CHARS = ' \t*_`"\'.:'
+
+# The judge answers with a bare Yes/No on a line of its own; a judge that explains itself
+# ("Yes, the answer is incorrect") must not set the verdict.
+class Equivalence(BaseModel):
+    verdict: Literal['Yes', 'No']
+
+
+EQUIVALENCE_CONTRACT = OutputContract(schema_model=Equivalence)
 
 JUDGE_PROMPT = """
 Look at the following two expressions (answers to a math problem) and judge whether they are equivalent. Only perform trivial simplifications
@@ -88,6 +105,7 @@ Remember to put your answer inside \\boxed{{}}."""
 
 @register_benchmark(
     BenchmarkMeta(
+        evaluation_version='v1.1',
         name='aime24',
         pretty_name='AIME-2024',
         tags=[Tags.MATH, Tags.REASONING],
@@ -120,11 +138,7 @@ AIME 2024 (American Invitational Mathematics Examination 2024) is a benchmark ba
 """,
         dataset_id='evalscope/aime24',
         subset_list=['default'],
-        metric_list=[{
-            'acc': {
-                'numeric': True
-            }
-        }],
+        metric_list=[{'acc': {'numeric': True}}],
         few_shot_num=0,
         train_split=None,
         eval_split='test',
@@ -132,7 +146,6 @@ AIME 2024 (American Invitational Mathematics Examination 2024) is a benchmark ba
     )
 )
 class AIME24Adapter(DefaultDataAdapter):
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -144,77 +157,53 @@ class AIME24Adapter(DefaultDataAdapter):
 
     def extract_answer(self, prediction: str, task_state: TaskState) -> str:
         from evalscope.metrics.math.parser import extract_answer
-        from .math_normalize import normalize_answer
 
-        extracted_pred = extract_answer(prediction)
-        filtered_pred = normalize_answer(extracted_pred)
-        return filtered_pred
+        return extract_answer(prediction)
 
     def match_score(
         self, original_prediction: str, filtered_prediction: str, reference: str, task_state: TaskState
     ) -> Score:
-        from .grader import grade_answer
+        from evalscope.constants import ScoreStatus
+        from evalscope.metrics.math.contracts import MathEvaluationError
+        from evalscope.metrics.math.parser import compare_answers
 
-        score = Score(
-            extracted_prediction=filtered_prediction,
-            prediction=original_prediction,
-        )
-
+        score = Score(extracted_prediction=filtered_prediction, prediction=original_prediction)
         try:
-            is_correct = grade_answer(filtered_prediction, reference)
-            accuracy_score = 1.0 if is_correct else 0.0
-            score.value['acc'] = accuracy_score
-        except Exception as e:
-            logger.error(f'Error in custom grading: {e}')
-            score.value['acc'] = 0.0
-            score.metadata['acc'] = f'grading_error: {str(e)}'
+            result = compare_answers(filtered_prediction, reference, integer_only=True)
+            score.value = {'acc': float(result.matched)}
+            score.metadata['math_reason'] = result.reason
+        except MathEvaluationError as exc:
+            score.status = ScoreStatus.EXCLUDED
+            score.metadata['metric_unavailable'] = True
+            score.metadata['acc'] = f'error: {exc}'
         return score
 
-    def llm_match_score(
-        self, original_prediction: str, filtered_prediction: str, reference: str, task_state: TaskState
-    ) -> Score:
-        score = Score(
-            extracted_prediction=filtered_prediction,
-            prediction=original_prediction,
+    def judge_definition(self, context: JudgeContext) -> JudgeDefinition:
+
+        def request(case, placement, completed_cases, judge_context) -> JudgeRequest:
+            prompt = (
+                JUDGE_PROMPT.format(
+                    expression1=judge_context.original_prediction,
+                    expression2=judge_context.reference,
+                )
+                + case.output_contract.instruction()
+            )
+            return JudgeRequest(messages=[ChatMessageUser(content=prompt)])
+
+        def reduce(case_verdicts, judge_context) -> ReducedVerdict:
+            return ReducedVerdict(value={'acc': 1.0 if case_verdicts[0].value.verdict == 'Yes' else 0.0})
+
+        return JudgeDefinition.workflow(
+            cases=[JudgeCase(case_id='equivalence', output_contract=EQUIVALENCE_CONTRACT)],
+            request=request,
+            reduce=reduce,
+            main_score_name='acc',
         )
-
-        judge_prompt = JUDGE_PROMPT.format(expression1=original_prediction, expression2=reference)
-
-        judge_response = self.llm_judge.judge(prompt=judge_prompt)
-
-        judge_verdicts = self._parse_judge_verdicts(judge_response)
-        is_correct = judge_verdicts == {'yes'}
-        score.value = {
-            'acc': 1.0 if is_correct else 0.0,
-        }
-        score.explanation = f'LLM judge: {judge_response}'
-        score.metadata = {
-            'source': 'llm_judge',
-            'judge_strategy': self.judge_strategy,
-            'model': self.llm_judge.model_id,
-        }
-        if len(judge_verdicts) != 1:
-            logger.warning(f'AIME: failed to parse LLM judge response: {judge_response!r}')
-            score.metadata['parse_failed'] = True
-        score.main_score_name = 'acc'
-        return score
-
-    @staticmethod
-    def _parse_judge_verdicts(judge_response: str) -> Set[str]:
-        """Collect the bare Yes/No verdicts the judge stated on lines of their own.
-
-        Matching anywhere in the response instead lets a judge that explains itself
-        ("Yes, the answer is incorrect") set the opposite verdict.
-        """
-        return {
-            verdict
-            for line in judge_response.splitlines()
-            if (verdict := line.strip(VERDICT_WRAPPER_CHARS).casefold()) in ('yes', 'no')
-        }
 
 
 @register_benchmark(
     BenchmarkMeta(
+        evaluation_version='v1.1',
         name='aime25',
         pretty_name='AIME-2025',
         tags=[Tags.MATH, Tags.REASONING],
@@ -246,23 +235,19 @@ AIME 2025 (American Invitational Mathematics Examination 2025) is a benchmark ba
 """,
         dataset_id='evalscope/aime25',
         subset_list=['default'],
-        metric_list=[{
-            'acc': {
-                'numeric': True
-            }
-        }],
+        metric_list=[{'acc': {'numeric': True}}],
         few_shot_num=0,
         train_split=None,
         eval_split='test',
         prompt_template=PROMPT_TEMPLATE,
     )
 )
-class AIME25Adapter(AIME24Adapter):
-    ...
+class AIME25Adapter(AIME24Adapter): ...
 
 
 @register_benchmark(
     BenchmarkMeta(
+        evaluation_version='v1.1',
         name='aime26',
         pretty_name='AIME-2026',
         tags=[Tags.MATH, Tags.REASONING],
@@ -294,16 +279,11 @@ AIME 2026 (American Invitational Mathematics Examination 2026) is a benchmark ba
 """,
         dataset_id='evalscope/aime26',
         subset_list=['default'],
-        metric_list=[{
-            'acc': {
-                'numeric': True
-            }
-        }],
+        metric_list=[{'acc': {'numeric': True}}],
         few_shot_num=0,
         train_split=None,
         eval_split='test',
         prompt_template=PROMPT_TEMPLATE,
     )
 )
-class AIME26Adapter(AIME24Adapter):
-    ...
+class AIME26Adapter(AIME24Adapter): ...

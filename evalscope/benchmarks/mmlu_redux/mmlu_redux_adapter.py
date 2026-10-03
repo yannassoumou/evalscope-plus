@@ -75,6 +75,7 @@ SUBSET_LIST = list(SUBJECT_MAPPING.keys())
 @register_benchmark(
     BenchmarkMeta(
         name='mmlu_redux',
+        evaluation_version='v1.1',
         pretty_name='MMLU-Redux',
         tags=[Tags.MULTIPLE_CHOICE, Tags.KNOWLEDGE],
         description="""
@@ -109,11 +110,7 @@ MMLU-Redux is an improved version of the MMLU benchmark with corrected answers. 
 """,  # noqa: E501
         dataset_id='AI-ModelScope/mmlu-redux-2.0',
         subset_list=SUBSET_LIST,
-        metric_list=[{
-            'acc': {
-                'allow_inclusion': True
-            }
-        }],
+        metric_list=[{'acc': {'allow_inclusion': True}}],
         few_shot_num=0,
         train_split=None,
         eval_split='test',
@@ -121,7 +118,6 @@ MMLU-Redux is an improved version of the MMLU benchmark with corrected answers. 
     )
 )
 class MMLUReduxAdapter(MultiChoiceAdapter):
-
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 

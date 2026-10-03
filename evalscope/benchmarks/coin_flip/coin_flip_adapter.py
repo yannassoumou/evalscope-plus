@@ -51,12 +51,15 @@ Remember to put your answer on its own line at the end in the form "ANSWER: [ANS
 Reasoning:
 """  # noqa: E501
 
-FEWSHOT_TEMPLATE = """
+FEWSHOT_TEMPLATE = (
+    """
 Here are some examples of how to solve similar problems:
 
 {fewshot}
 
-""".lstrip() + PROMPT_TEMPLATE  # noqa: E501
+""".lstrip()
+    + PROMPT_TEMPLATE
+)  # noqa: E501
 
 
 @register_benchmark(
@@ -69,6 +72,7 @@ Here are some examples of how to solve similar problems:
         metric_list=['accuracy', 'precision', 'recall', 'f1_score', 'yes_ratio'],
         primary_metric='accuracy',
         few_shot_num=0,
+        few_shot_mode='disabled',
         train_split='validation',
         eval_split='test',
         prompt_template=PROMPT_TEMPLATE,
@@ -76,7 +80,6 @@ Here are some examples of how to solve similar problems:
     )
 )
 class CoinFlipAdapter(DefaultDataAdapter):
-
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.add_overall_metric = False
@@ -87,9 +90,13 @@ class CoinFlipAdapter(DefaultDataAdapter):
         input_text = self.prompt_template.format(question=question)
         content_list: List[Content] = [ContentText(text=input_text)]
         answer = str(answer).upper()  # 'YES' or 'NO'
-        return Sample(input=[ChatMessageUser(content=content_list)], target=answer, metadata={
-            'answer': answer,
-        })
+        return Sample(
+            input=[ChatMessageUser(content=content_list)],
+            target=answer,
+            metadata={
+                'answer': answer,
+            },
+        )
 
     def extract_answer(self, prediction, task_state):
         import re
@@ -142,7 +149,7 @@ class CoinFlipAdapter(DefaultDataAdapter):
             'precision': precision,
             'recall': recall,
             'f1_score': f1_score,
-            'yes_ratio': yes_ratio
+            'yes_ratio': yes_ratio,
         }
 
         agg_scores = []

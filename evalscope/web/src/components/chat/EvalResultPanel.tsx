@@ -60,12 +60,22 @@ export function CollapsibleJson({
 
 export interface EvalResultPanelProps {
   pred: string
-  gold: string
-  nScore: number
+  gold: string | string[]
+  /** ``null`` when the sample has no usable score. */
+  nScore: number | null
+  /** Mirrors ``ScoreStatus``; explains why a score is unavailable. */
+  status?: string
   score: Record<string, unknown>
   metadata: unknown
   threshold: number
   showPred: boolean
+}
+
+const STATUS_LABEL_KEYS: Record<string, string> = {
+  transport_error: 'prediction.statusTransportError',
+  parse_error: 'prediction.statusParseError',
+  invalid_session: 'prediction.statusInvalidSession',
+  excluded: 'prediction.statusExcluded',
 }
 
 const eyebrowBase = 'type-label-xs mb-2 flex items-center gap-1.5'
@@ -74,6 +84,7 @@ export function EvalResultPanel({
   pred,
   gold,
   nScore,
+  status,
   score,
   metadata,
   threshold,
@@ -131,7 +142,17 @@ export function EvalResultPanel({
             {t('prediction.expectedAnswer')}
           </div>
           <div className="type-body-sm text-[var(--text)]">
-            <MarkdownRenderer content={gold} />
+            {Array.isArray(gold) ? (
+              <ul className="list-disc space-y-1 pl-4">
+                {gold.map((answer, index) => (
+                  <li key={`${index}-${answer}`}>
+                    <MarkdownRenderer content={answer} />
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <MarkdownRenderer content={gold} />
+            )}
           </div>
         </div>
 
@@ -141,10 +162,30 @@ export function EvalResultPanel({
             {t('prediction.score')}
           </div>
           <div className="flex flex-col gap-1">
-            <ScoreBadge score={nScore} semantics={RATIO_PERCENT_SEMANTICS} threshold={threshold} className="self-start" />
-            <span className="type-body-xs text-[var(--text-muted)]">
-              {nScore >= threshold ? t('prediction.aboveFilter') : t('prediction.belowFilter')} · {threshold}
-            </span>
+            {nScore === null ? (
+              <>
+                <span
+                  className="inline-block self-start px-2.5 py-0.5 rounded-full border text-sm font-bold"
+                  style={{
+                    backgroundColor: 'var(--warning-bg)',
+                    borderColor: 'var(--warning-border)',
+                    color: 'var(--warning-text)',
+                  }}
+                >
+                  {t('prediction.unavailable')}
+                </span>
+                <span className="type-body-xs text-[var(--text-muted)]">
+                  {status && STATUS_LABEL_KEYS[status] ? t(STATUS_LABEL_KEYS[status]) : t('prediction.unavailableHint')}
+                </span>
+              </>
+            ) : (
+              <>
+                <ScoreBadge score={nScore} semantics={RATIO_PERCENT_SEMANTICS} threshold={threshold} className="self-start" />
+                <span className="type-body-xs text-[var(--text-muted)]">
+                  {nScore >= threshold ? t('prediction.aboveFilter') : t('prediction.belowFilter')} · {threshold}
+                </span>
+              </>
+            )}
           </div>
         </div>
       </div>

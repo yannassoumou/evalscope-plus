@@ -24,8 +24,8 @@ MIA-Bench is a multimodal instruction-following benchmark designed to evaluate v
 
 - Default evaluation uses the **test** split (400 samples)
 - Primary metric: **judge_score** (mean of per-sample normalized 0–1 total scores)
-- Requires a capable LLM judge (e.g., GPT-4o, Qwen-Max) configured via `judge_model_args`
-- Judge strategy should be set to `JudgeStrategy.LLM`
+- Requires a capable LLM judge (e.g., GPT-4o, Qwen-Max) configured through `judge.models`
+- Judge strategy should be set to `judge.strategy='llm'`
 
 
 ## Properties
@@ -67,7 +67,7 @@ MIA-Bench is a multimodal instruction-following benchmark designed to evaluate v
 {
   "input": [
     {
-      "id": "9156e81c",
+      "id": "c09c1ebf",
       "content": [
         {
           "image": "[BASE64_IMAGE: jpeg, ~195.9KB]"
@@ -118,6 +118,7 @@ evalscope eval \
     --api-url OPENAI_API_COMPAT_URL \
     --api-key EMPTY_TOKEN \
     --datasets mia_bench \
+    --judge '{"strategy":"llm","models":[{"model_id":"YOUR_JUDGE_MODEL"}]}' \
     --limit 10  # Remove this line for formal evaluation
 ```
 
@@ -132,6 +133,7 @@ task_cfg = TaskConfig(
     api_url='OPENAI_API_COMPAT_URL',
     api_key='EMPTY_TOKEN',
     datasets=['mia_bench'],
+    judge={'strategy': 'llm', 'models': [{'model_id': 'YOUR_JUDGE_MODEL'}]},
     limit=10,  # Remove this line for formal evaluation
 )
 

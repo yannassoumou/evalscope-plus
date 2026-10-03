@@ -39,9 +39,6 @@ class DataAdapter(LLMJudgeMixin, ABC):
         self.split_as_subset = False
         """Whether to use the split name as the dataset subsets"""
 
-        self.shuffle_choices = False
-        """Whether to shuffle the choices in the dataset"""
-
         self.use_batch_scoring = False
         """Whether to use batch scoring for metrics that support it, need to be enabled in the benchmark as well"""
 
@@ -67,9 +64,29 @@ class DataAdapter(LLMJudgeMixin, ABC):
         # filters
         self._filter_ensemble: Optional[OrderedDict] = None
 
+        self._validate_few_shot_config()
+
+    def _validate_few_shot_config(self) -> None:
+        """Reject unsupported few-shot requests before any dataset I/O."""
+        if self.few_shot_num == 0:
+            return
+        if self.few_shot_mode == 'disabled' or (self.few_shot_mode == 'auto' and self.train_split is None):
+            raise ValueError(f'Benchmark {self.name!r} does not support few-shot evaluation; set few_shot_num=0.')
+        allowed_counts = self.allowed_few_shot_nums
+        if allowed_counts is not None and self.few_shot_num not in allowed_counts:
+            allowed = ', '.join(str(count) for count in allowed_counts)
+            raise ValueError(
+                f'Benchmark {self.name!r} supports few_shot_num values: {allowed}; got {self.few_shot_num}.'
+            )
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert the benchmark metadata to a dictionary."""
         return self._benchmark_meta.to_string_dict()
+
+    @property
+    def benchmark_meta(self) -> 'BenchmarkMeta':
+        """Return the resolved benchmark metadata used by this adapter."""
+        return self._benchmark_meta
 
     @abstractmethod
     def load_dataset(self) -> DatasetDict:
@@ -84,8 +101,9 @@ class DataAdapter(LLMJudgeMixin, ABC):
         pass
 
     @abstractmethod
-    def batch_calculate_metrics(self, task_states: List[TaskState],
-                                sample_scores: List[SampleScore]) -> List[SampleScore]:
+    def batch_calculate_metrics(
+        self, task_states: List[TaskState], sample_scores: List[SampleScore]
+    ) -> List[SampleScore]:
         """Batch calculate metrics for a list of task states. Need to update sample_scores in place."""
         pass
 
@@ -155,6 +173,11 @@ class DataAdapter(LLMJudgeMixin, ABC):
         self._task_config.dataset_hub = value
 
     @property
+    def dataset_revision(self) -> Optional[str]:
+        """Return the resolved revision of the remote dataset source."""
+        return self._benchmark_meta.dataset_revision
+
+    @property
     def eval_type(self) -> str:
         """
         Return the evaluation type for the benchmark.
@@ -218,6 +241,16 @@ class DataAdapter(LLMJudgeMixin, ABC):
         Set the few shot number of the benchmark.
         """
         self._benchmark_meta.few_shot_num = value
+
+    @property
+    def few_shot_mode(self) -> str:
+        """Return the benchmark's few-shot capability mode."""
+        return self._benchmark_meta.few_shot_mode
+
+    @property
+    def allowed_few_shot_nums(self) -> Optional[tuple[int, ...]]:
+        """Return the explicitly allowed few-shot counts, if bounded."""
+        return self._benchmark_meta.allowed_few_shot_nums
 
     @property
     def few_shot_random(self) -> bool:

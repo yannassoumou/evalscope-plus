@@ -158,8 +158,8 @@ def format_metric_label(
 ) -> str:
     """Render one identity through its display name, direction, and meaningful dimensions.
 
-    Diagnostic and unresolved metrics keep their final report name because their shared generic
-    baselines must not erase what was actually measured.
+    Diagnostic and unresolved metrics keep their final report name unless their declared
+    semantics provide an explicit diagnostic display name.
 
     Args:
         identity: V2 identity, or a v1 string during migration.
@@ -175,8 +175,10 @@ def format_metric_label(
     else:
         raw_name = identity.key
         dimensions = identity.dimensions
-    if semantics is None or semantics.kind is MetricKind.DIAGNOSTIC:
+    if semantics is None:
         return legacy_name or raw_name
+    if semantics.kind is MetricKind.DIAGNOSTIC:
+        return semantics.display_name or legacy_name or raw_name
     arrow = _DIRECTION_ARROWS.get(semantics.direction, '')
     label = f'{semantics.metric_name} {arrow}'.strip()
     if dimensions:
@@ -187,7 +189,7 @@ def format_metric_label(
 
 
 def format_metric_labels(
-    metrics: Iterable[Tuple[Union[MetricIdentity, str], Optional[MetricSemantics]]]
+    metrics: Iterable[Tuple[Union[MetricIdentity, str], Optional[MetricSemantics]]],
 ) -> Dict[str, str]:
     """Render all metric labels of one report and disambiguate repeated display names.
 
@@ -245,6 +247,7 @@ def format_perf_value(
         # Function-local import preserves the one-way package import graph: resolver imports the
         # formatting-independent perf catalog, while renderers can still use this convenience API.
         from evalscope.metrics.semantics.resolver import get_semantics_resolver
+
         resolver = get_semantics_resolver()
     semantics = resolver.resolve_perf_field(field_key).semantics
     if not include_unit and semantics.display_unit:

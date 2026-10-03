@@ -6,8 +6,9 @@
 * ``TestPerfDiagnostics`` -- counts, cache and failure details carry no direction.
 """
 
-import pytest
 from typing import Dict, FrozenSet
+
+import pytest
 
 from evalscope.api.metric.semantics import MetricDirection, MetricKind
 from evalscope.metrics.semantics import attach_perf_semantics, format_perf_value, resolve_perf_semantics
@@ -31,10 +32,16 @@ LOWER_IS_BETTER_FIELDS = (
     Metrics.AVERAGE_TIME_TO_FIRST_TOKEN,
     Metrics.AVERAGE_TIME_PER_OUTPUT_TOKEN,
     Metrics.AVERAGE_INTER_TOKEN_LATENCY,
+    Metrics.AVERAGE_STEADY_INTER_TOKEN_LATENCY,
+    Metrics.AVERAGE_PD_HANDOFF_LATENCY,
+    Metrics.AVERAGE_PD_HANDOFF_OVERHEAD,
     Metrics.AVERAGE_FIRST_TURN_TTFT,
     Metrics.AVERAGE_SUBSEQUENT_TURN_TTFT,
     PercentileMetrics.TTFT,
     PercentileMetrics.ITL,
+    PercentileMetrics.STEADY_ITL,
+    PercentileMetrics.PD_HANDOFF_LATENCY,
+    PercentileMetrics.PD_HANDOFF_OVERHEAD,
     PercentileMetrics.TPOT,
     PercentileMetrics.LATENCY,
 )
