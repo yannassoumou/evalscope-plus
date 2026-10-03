@@ -1,7 +1,10 @@
 "$schema" = "https://conductor.build/schemas/settings.repo.schema.json"
 
 [scripts]
-setup = "pip install -e '.[dev,perf,docs]'"
+setup = """
+pip install -e '.[dev,perf,docs]'
+cd evalscope/web && npm install && npm run build
+"""
 run_mode = "concurrent"
 archive = "rm -rf outputs"
 
